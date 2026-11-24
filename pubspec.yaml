@@ -1,5 +1,5 @@
 name: sqwpfun
-description: SQWPFun - our own anime app (player stack like Kazumi: inappwebview sniffer + media_kit)
+description: "SQWPFun - our own anime app, media_kit player with inappwebview sniffer"
 publish_to: "none"
 version: 0.1.0+1
 
