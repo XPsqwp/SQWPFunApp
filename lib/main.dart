@@ -27,6 +27,43 @@ const sources = <Source>[
   Source('Moonci', 'https://www.moonci.com'),
 ];
 
+/// 当季档期，例如 2026 年 11 月 -> 202610
+String currentSeason() {
+  final now = DateTime.now();
+  final m = ((now.month - 1) ~/ 3) * 3 + 1;
+  return '${now.year}${m.toString().padLeft(2, '0')}';
+}
+
+/// yuc.wiki 当季新番表：纯动画情报，按关键词在本地过滤
+Future<List<Hit>> searchYuc(String kw) async {
+  try {
+    final season = currentSeason();
+    final r = await http.get(
+      Uri.parse('https://yuc.wiki/$season/'),
+      headers: {'User-Agent': _ua},
+    ).timeout(const Duration(seconds: 15));
+    final html = r.body;
+    final blocks = html.split(RegExp(r'<!--#[A-Za-z]?\d+-->'));
+    final out = <Hit>[];
+    var idx = 0;
+    for (final b in blocks.skip(1)) {
+      final cover = RegExp(r'data-src="([^"]+)"').firstMatch(b)?.group(1);
+      final cn = RegExp(r'class="title_cn_r">([^<]*)<').firstMatch(b)?.group(1) ?? '';
+      final jp = RegExp(r'class="title_jp_r">([^<]*)<').firstMatch(b)?.group(1) ?? '';
+      if (cover == null) continue;
+      idx++;
+      final title = cn.trim().isEmpty ? jp.trim() : cn.trim();
+      if (title.isEmpty) continue;
+      if (kw.isNotEmpty && !title.contains(kw) && !jp.contains(kw)) continue;
+      out.add(Hit(title, idx, cover.replaceFirst('http://', 'https://'),
+          const Source('Yuc', 'https://yuc.wiki')));
+    }
+    return out;
+  } catch (_) {
+    return const [];
+  }
+}
+
 class Hit {
   final String name;
   final int id;
@@ -41,16 +78,22 @@ class Episode {
   Episode(this.label, this.url);
 }
 
-Future<List<Hit>> searchAll(String kw) async {
+Future<List<Hit>> searchAll(String kw, List<String> logs) async {
   final enc = Uri.encodeComponent(kw);
   final results = <Hit>[];
   await Future.wait(sources.map((s) async {
     try {
       final r = await http.get(
         Uri.parse('${s.base}/index.php/ajax/suggest?mid=1&wd=$enc'),
-        headers: {'User-Agent': _ua, 'Referer': '${s.base}/'},
+        headers: {'User-Agent': _ua},
       ).timeout(const Duration(seconds: 12));
-      final list = (jsonDecode(r.body) as Map)['list'] as List? ?? [];
+      final body = r.body;
+      if (!body.trimLeft().startsWith('{')) {
+        logs.add('${s.name}: HTTP ${r.statusCode} 非 JSON');
+        return;
+      }
+      final list = (jsonDecode(body) as Map)['list'] as List? ?? [];
+      logs.add('${s.name}: ${list.length} 条');
       for (final it in list) {
         results.add(Hit(
           (it['name'] ?? '').toString(),
@@ -59,8 +102,13 @@ Future<List<Hit>> searchAll(String kw) async {
           s,
         ));
       }
-    } catch (_) {}
+    } catch (e) {
+      logs.add('${s.name}: ${e.runtimeType}');
+    }
   }));
+  final yuc = await searchYuc(kw);
+  logs.add('Yuc: ${yuc.length} 条');
+  results.addAll(yuc);
   return results;
 }
 
@@ -119,16 +167,18 @@ class _SearchPageState extends State<SearchPage> {
   List<Hit> _hits = [];
   bool _loading = false;
   String? _err;
+  final List<String> _logs = [];
 
   Future<void> _search() async {
     final kw = _ctrl.text.trim();
     if (kw.isEmpty) return;
+    _logs.clear();
     setState(() {
       _loading = true;
       _err = null;
       _hits = [];
     });
-    final hits = await searchAll(kw);
+    final hits = await searchAll(kw, _logs);
     if (!mounted) return;
     setState(() {
       _loading = false;
@@ -138,6 +188,12 @@ class _SearchPageState extends State<SearchPage> {
   }
 
   Future<void> _open(Hit hit) async {
+    if (hit.source.base == 'https://yuc.wiki') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('这是情报源（没有播放地址），换 LMM / Moonci 的结果看')),
+      );
+      return;
+    }
     final eps = await episodes(hit);
     if (!mounted) return;
     if (eps.isEmpty) {
@@ -213,6 +269,13 @@ class _SearchPageState extends State<SearchPage> {
             ),
           ),
           if (_loading) const LinearProgressIndicator(minHeight: 2),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              _logs.isEmpty ? '源: LMM / Moonci / Yuc' : _logs.join('   '),
+              style: const TextStyle(fontSize: 10, color: Colors.white54),
+            ),
+          ),
           if (_err != null)
             Padding(
               padding: const EdgeInsets.all(24),
