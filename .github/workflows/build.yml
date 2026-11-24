@@ -22,6 +22,12 @@ jobs:
           cp -r _scaffold/android .
           sed -i 's/android:label="sqwpfun"/android:label="SQWPFun"/' android/app/src/main/AndroidManifest.xml
       - run: flutter pub get
+      - name: Patch inappwebview proguard rule (newer AGP rejects -dontoptimize)
+        run: |
+          for f in ~/.pub-cache/hosted/pub.dev/flutter_inappwebview_android-*/android/build.gradle; do
+            sed -i "s/proguard-android\.txt/proguard-android-optimize.txt/g" "$f"
+            echo "patched $f"
+          done
       - run: flutter build apk --release --target-platform android-arm64
       - uses: actions/upload-artifact@v4
         with:
