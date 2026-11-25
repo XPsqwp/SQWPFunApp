@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'package:http/http.dart' as http;
 import 'package:flutter/material.dart';
 import 'package:flutter_inappwebview/flutter_inappwebview.dart';
 import 'package:media_kit/media_kit.dart';
@@ -29,6 +31,55 @@ class _PlayerPageState extends State<PlayerPage> {
   late final VideoController _vc = VideoController(_player);
   String? _mediaUrl;
   bool _playing = false;
+  String? _resolved;
+  bool _resolving = true;
+
+  /// 苹果CMS 播放页里藏着 player_aaaa：encrypt 0/1/2 分别对应原样/unescape/base64，
+  /// 解出来的 url 往往就是"真正播放器"的地址（例如 Moonci 指向 next.xifanacg.com）。
+  Future<String> _resolve(String page) async {
+    try {
+      final r = await http.get(
+        Uri.parse(page),
+        headers: {'User-Agent': widget.userAgent.isEmpty ? _ua : widget.userAgent},
+      ).timeout(const Duration(seconds: 12));
+      final idx = r.body.indexOf('player_aaaa');
+      if (idx >= 0) {
+        final start = r.body.indexOf('{', idx);
+        var depth = 0;
+        var end = -1;
+        for (var i = start; i < r.body.length; i++) {
+          if (r.body[i] == '{') depth++;
+          if (r.body[i] == '}') {
+            depth--;
+            if (depth == 0) {
+              end = i;
+              break;
+            }
+          }
+        }
+        if (end > start) {
+          final j = jsonDecode(r.body.substring(start, end + 1)) as Map;
+          var url = (j['url'] ?? '').toString();
+          final enc = int.tryParse('${j['encrypt'] ?? 0}') ?? 0;
+          if (enc == 1) url = Uri.decodeFull(url);
+          if (url.startsWith('http')) return url;
+        }
+      }
+    } catch (_) {}
+    return page;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _resolve(widget.playPage).then((u) {
+      if (!mounted) return;
+      setState(() {
+        _resolved = u;
+        _resolving = false;
+      });
+    });
+  }
 
   bool _isMedia(String u) {
     final l = u.toLowerCase();
@@ -75,11 +126,17 @@ class _PlayerPageState extends State<PlayerPage> {
       ),
       body: Stack(
         children: [
+          if (_resolving)
+            const Center(child: CircularProgressIndicator(color: Color(0xFF9ED9B3)))
+          else
           if (_playing)
             Video(controller: _vc)
           else
             InAppWebView(
-              initialUrlRequest: URLRequest(url: WebUri(widget.playPage)),
+              initialUrlRequest: URLRequest(
+                url: WebUri(_resolved ?? widget.playPage),
+                headers: {'Referer': widget.playPage},
+              ),
               initialSettings: InAppWebViewSettings(
                 javaScriptEnabled: true,
                 mediaPlaybackRequiresUserGesture: false,
