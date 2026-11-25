@@ -102,9 +102,26 @@ String _strip(String html) => html
     .replaceAll('&nbsp;', ' ')
     .trim();
 
-/// yuc.wiki 当季新番表（纯动画情报，国内直连）
-Future<List<Anime>> fetchSeason() async {
-  final season = currentSeason();
+/// 最近 8 个季度（含当季），按时间倒序
+List<String> recentSeasons() {
+  final now = DateTime.now();
+  var y = now.year;
+  var m = ((now.month - 1) ~/ 3) * 3 + 1;
+  final out = <String>[];
+  for (var i = 0; i < 8; i++) {
+    out.add('$y${m.toString().padLeft(2, '0')}');
+    m -= 3;
+    if (m < 1) {
+      m = 10;
+      y -= 1;
+    }
+  }
+  return out;
+}
+
+/// yuc.wiki 新番表（纯动画情报，国内直连）；season 形如 202610
+Future<List<Anime>> fetchSeason([String? seasonArg]) async {
+  final season = seasonArg ?? currentSeason();
   final r = await http.get(
     Uri.parse('https://yuc.wiki/$season/'),
     headers: {'User-Agent': _ua},
@@ -431,6 +448,7 @@ class _HomeShellState extends State<HomeShell> {
   bool _loading = true;
   String? _error;
   String _query = '';
+  String _season = currentSeason();
   List<Anime> _favorites = [];
   List<WatchEntry> _history = [];
 
@@ -442,9 +460,16 @@ class _HomeShellState extends State<HomeShell> {
     _reloadHistory();
   }
 
-  Future<void> _load() async {
+  Future<void> _load([String? season]) async {
+    final target = season ?? _season;
+    if (mounted) setState(() {
+      _loading = true;
+      _error = null;
+      _season = target;
+      _catalog = [];
+    });
     try {
-      final list = await fetchSeason();
+      final list = await fetchSeason(target);
       if (!mounted) return;
       setState(() {
         _catalog = list;
@@ -502,6 +527,9 @@ class _HomeShellState extends State<HomeShell> {
         loading: _loading,
         error: _error,
         query: _query,
+        season: _season,
+        seasons: recentSeasons(),
+        onSeason: (v) => _load(v),
         history: _history,
         onQuery: (v) => setState(() => _query = v),
         onOpen: (a) => _openDetail(a),
@@ -690,6 +718,9 @@ class RecommendPage extends StatelessWidget {
   final bool loading;
   final String? error;
   final String query;
+  final String season;
+  final List<String> seasons;
+  final ValueChanged<String> onSeason;
   final List<WatchEntry> history;
   final ValueChanged<String> onQuery;
   final ValueChanged<Anime> onOpen;
@@ -702,6 +733,9 @@ class RecommendPage extends StatelessWidget {
     required this.loading,
     required this.error,
     required this.query,
+    required this.season,
+    required this.seasons,
+    required this.onSeason,
     required this.history,
     required this.onQuery,
     required this.onOpen,
@@ -711,7 +745,7 @@ class RecommendPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final season = currentSeason();
+    final season = this.season.isEmpty ? currentSeason() : this.season;
     final today = DateTime.now().weekday; // 1..7
     final todayList = catalog.where((a) => a.weekday == today).toList();
     final filtered = catalog.where((a) {
@@ -748,6 +782,41 @@ class RecommendPage extends StatelessWidget {
                     icon: const Icon(Icons.travel_explore, color: _ink),
                   ),
                 ],
+              ),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: SizedBox(
+              height: 42,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.fromLTRB(20, 6, 20, 0),
+                itemCount: seasons.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemBuilder: (ctx, i) {
+                  final key = seasons[i];
+                  final on = key == season;
+                  return GestureDetector(
+                    onTap: () => onSeason(key),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: on ? const Color(0xFF2C4438) : Colors.white.withValues(alpha: 0.55),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Center(
+                        child: Text(
+                          seasonName(key),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: on ? Colors.white : _ink,
+                            fontWeight: on ? FontWeight.w600 : FontWeight.w400,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                },
               ),
             ),
           ),
