@@ -8,6 +8,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:http/http.dart' as http;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'hls_proxy.dart';
 import 'package:media_kit/media_kit.dart' show Player;
 
 void main() {
@@ -672,6 +673,18 @@ class GlassNavBar extends StatelessWidget {
 
 /* ------------------------------- 页面 ------------------------------- */
 
+/// 热度打分：没有官方榜，就用「今日更新 / 已定档 / 情报完整度」做替代指标
+double _hotScore(Anime a, int today) {
+  var s = 0.0;
+  if (a.weekday == today) s += 4;
+  if (a.broadcast.trim().isNotEmpty) s += 2;
+  if (a.cover.isNotEmpty) s += 1.5;
+  if (a.staff.trim().isNotEmpty) s += 1;
+  if (a.cast.trim().isNotEmpty) s += 1;
+  s -= a.titleCn.length.clamp(0, 30) * 0.05;
+  return s;
+}
+
 class RecommendPage extends StatelessWidget {
   final List<Anime> catalog;
   final bool loading;
@@ -705,6 +718,8 @@ class RecommendPage extends StatelessWidget {
       if (query.isEmpty) return true;
       return a.titleCn.contains(query) || a.titleJp.contains(query) || a.cast.contains(query);
     }).toList();
+    // 热门优先：今日更新 > 本周内已定档 > 情报完整（有封面/STAFF/CAST）> 标题更短
+    filtered.sort((a, b) => _hotScore(b, today).compareTo(_hotScore(a, today)));
     final resume = history.take(6).toList();
 
     return SafeArea(
@@ -883,7 +898,7 @@ class RecommendPage extends StatelessWidget {
           const SliverToBoxAdapter(
             child: Padding(
               padding: EdgeInsets.fromLTRB(20, 18, 20, 8),
-              child: Text('全部新番', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _ink)),
+              child: Text('热门番剧', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _ink)),
             ),
           ),
           if (loading)
@@ -1083,20 +1098,70 @@ class FavoritesPage extends StatelessWidget {
   }
 }
 
-class MinePage extends StatelessWidget {
+class MinePage extends StatefulWidget {
   const MinePage({super.key});
   @override
+  State<MinePage> createState() => _MinePageState();
+}
+
+class _MinePageState extends State<MinePage> {
+  bool _adFilter = true;
+
+  @override
+  void initState() {
+    super.initState();
+    SharedPreferences.getInstance().then((sp) {
+      if (mounted) setState(() => _adFilter = sp.getBool('adFilter') ?? true);
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return const SafeArea(
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text('我的', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: _ink)),
-            SizedBox(height: 6),
-            Text('设置 · 同步 · 关于', style: TextStyle(fontSize: 13, color: _sub)),
-          ],
-        ),
+    return SafeArea(
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(20, 32, 20, 20),
+        children: [
+          const Text('我的',
+              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: _ink)),
+          const SizedBox(height: 6),
+          const Text('设置 · 同步 · 关于',
+              style: TextStyle(fontSize: 13, color: _sub)),
+          const SizedBox(height: 24),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: SwitchListTile(
+              value: _adFilter,
+              activeThumbColor: const Color(0xFF9ED9B3),
+              title: const Text('广告过滤（HLS）',
+                  style: TextStyle(fontSize: 14, color: _ink)),
+              subtitle: const Text(
+                '播放时本地重写 m3u8：丢掉广告分片、补 Referer',
+                style: TextStyle(fontSize: 11, color: _sub),
+              ),
+              onChanged: (v) async {
+                setState(() => _adFilter = v);
+                final sp = await SharedPreferences.getInstance();
+                await sp.setBool('adFilter', v);
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: const ListTile(
+              leading: Icon(Icons.hub_outlined, color: _sub),
+              title: Text('播放源', style: TextStyle(fontSize: 14, color: _ink)),
+              subtitle: Text('15 个采集站 · 直链源优先',
+                  style: TextStyle(fontSize: 11, color: _sub)),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1481,12 +1546,16 @@ class _PlayerPageState extends State<PlayerPage> {
   bool _restored = false;
   int _lastPos = 0;
   int _lastSaved = 0;
+  bool _adFilter = true;
 
   String get _key => 'pos:${widget.title}:$_index';
 
   @override
   void initState() {
     super.initState();
+    SharedPreferences.getInstance().then((sp) {
+      if (mounted) setState(() => _adFilter = sp.getBool('adFilter') ?? true);
+    });
     if (widget.direct) _resolveDirect();
   }
 
@@ -1513,8 +1582,16 @@ class _PlayerPageState extends State<PlayerPage> {
 
   Future<void> _hit(String u) async {
     if (_mediaUrl != null || !_isMedia(u)) return;
+    var playUrl = u;
+    if (_adFilter && u.contains('.m3u8')) {
+      try {
+        playUrl = await HlsProxy.wrap(u, referer: widget.playPage);
+      } catch (_) {
+        playUrl = u;
+      }
+    }
     setState(() => _mediaUrl = u);
-    await _player.open(Media(u));
+    await _player.open(Media(playUrl));
     if (!_restored) {
       _restored = true;
       final sp = await SharedPreferences.getInstance();
