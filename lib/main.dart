@@ -286,22 +286,43 @@ Future<String> directM3u8Of(String playPageUrl) async {
 
 Future<List<Episode>> episodesOf(Hit hit) async {
   try {
-    final detail = '${hit.source.base}${hit.source.detailPath.replaceAll('{id}', '${hit.id}')}';
+    final detail =
+        '${hit.source.base}${hit.source.detailPath.replaceAll('{id}', '${hit.id}')}';
     final r = await http.get(
       Uri.parse(detail),
       headers: {'User-Agent': _ua},
     ).timeout(const Duration(seconds: 15));
+    final body = r.body;
+
+    // 依次尝试：源自带正则 → 苹果CMS两种命名 → 任何 /play/ 链接
+    final patterns = <String>[
+      hit.source.episodeRegex,
+      r'/play/[\d_-]+\.html',
+      r'/play/\d+-\d+-\d+/',
+      r'href="([^"\'#]+(?:play|vodplay)[^"\'#]*)"',
+    ];
+    var paths = <String>[];
+    for (final pat in patterns) {
+      if (pat.isEmpty) continue;
+      final found = <String>[];
+      for (final m in RegExp(pat).allMatches(body)) {
+        final p = (m.groupCount >= 1 && m.group(1) != null) ? m.group(1)! : m.group(0)!;
+        if (p.contains('play')) found.add(p);
+      }
+      if (found.length > paths.length) paths = found;
+      if (paths.length >= 3) break;
+    }
+
     final seen = <String>{};
     final out = <Episode>[];
-    for (final m in RegExp(hit.source.episodeRegex).allMatches(r.body)) {
-      final path = m.group(0)!;
+    for (final path in paths) {
       if (!seen.add(path)) continue;
-      // 兼容 xxx_1_2.html / xxx/play/1-2.html 两种命名
-      final nums = RegExp(r'(\d+)[._\-/](\d+)(?:\.html|/)$').allMatches(path).toList();
+      final nums = RegExp(r'(\d+)[._\-/](\d+)[._\-/]?(\d+)?').allMatches(path).toList();
       final last = nums.isEmpty ? null : nums.last;
       final line = last?.group(1) ?? '1';
       final ep = last?.group(2) ?? '${out.length + 1}';
-      out.add(Episode(line == '1' ? '第$ep话' : '线路$line·第$ep话', '${hit.source.base}$path'));
+      final url = path.startsWith('http') ? path : '${hit.source.base}$path';
+      out.add(Episode(line == '1' ? '第$ep话' : '线路$line·第$ep话', url));
     }
     return out;
   } catch (_) {
@@ -1366,7 +1387,8 @@ class _WatchPageState extends State<WatchPage> {
                     Text(_logs.join('   '), style: const TextStyle(fontSize: 10, color: Colors.white38)),
                     const SizedBox(height: 8),
                     ...(_hits ?? []).map((h) => Card(
-                          color: Colors.white10,
+                          color: const Color(0xFF1B2A22),
+                          elevation: 0,
                           child: ListTile(
                             leading: SizedBox(
                               width: 46,
@@ -1376,8 +1398,17 @@ class _WatchPageState extends State<WatchPage> {
                                 child: CachedNetworkImage(imageUrl: h.pic, fit: BoxFit.cover),
                               ),
                             ),
-                            title: Text(h.name, maxLines: 2, overflow: TextOverflow.ellipsis),
-                            subtitle: Text(h.source.name, style: const TextStyle(fontSize: 11)),
+                            title: Text(h.name,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(color: Colors.white, fontSize: 14)),
+                            subtitle: Text(
+                              h.source.directM3u8 ? '${h.source.name} · 直链可播' : h.source.name,
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: h.source.directM3u8 ? const Color(0xFF9ED9B3) : Colors.white54,
+                              ),
+                            ),
                             onTap: () => _open(h),
                           ),
                         )),
