@@ -26,6 +26,12 @@ jobs:
           sed -i 's|<application|<application android:usesCleartextTraffic="true"|' android/app/src/main/AndroidManifest.xml
           sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <application|' android/app/src/main/AndroidManifest.xml
           grep -n "INTERNET\|usesCleartext" android/app/src/main/AndroidManifest.xml
+      - name: Copy SQWPFun launcher icons
+        run: |
+          for d in icons/mipmap-*; do
+            cp -f "$d/ic_launcher.png" "android/app/src/main/res/$(basename $d)/ic_launcher.png"
+            echo "icon -> $(basename $d)"
+          done
       - run: flutter pub get
       - name: Patch inappwebview proguard rule (newer AGP rejects -dontoptimize)
         run: |

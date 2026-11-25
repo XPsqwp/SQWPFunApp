@@ -8,6 +8,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 import 'package:http/http.dart' as http;
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:media_kit/media_kit.dart' show Player;
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -1049,7 +1050,13 @@ class _WatchPageState extends State<WatchPage> {
                   itemCount: eps.length,
                   itemBuilder: (ctx, i) => GestureDetector(
                     onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                      builder: (_) => PlayerPage(title: _picked!.name, playPage: eps[i].url),
+                      builder: (_) => PlayerPage(
+                        title: _picked!.name,
+                        playPage: eps[i].url,
+                        episodes: eps.map((e) => e.url).toList(),
+                        index: i,
+                        labels: eps.map((e) => e.label).toList(),
+                      ),
                     )),
                     child: Container(
                       alignment: Alignment.center,
@@ -1068,7 +1075,17 @@ class _WatchPageState extends State<WatchPage> {
 class PlayerPage extends StatefulWidget {
   final String title;
   final String playPage;
-  const PlayerPage({super.key, required this.title, required this.playPage});
+  final List<String> episodes;
+  final List<String> labels;
+  final int index;
+  const PlayerPage({
+    super.key,
+    required this.title,
+    required this.playPage,
+    required this.episodes,
+    required this.labels,
+    required this.index,
+  });
   @override
   State<PlayerPage> createState() => _PlayerPageState();
 }
@@ -1077,6 +1094,12 @@ class _PlayerPageState extends State<PlayerPage> {
   final Player _player = Player();
   late final VideoController _vc = VideoController(_player);
   String? _mediaUrl;
+  late int _index = widget.index;
+  String? _resumeKey;
+  StreamSubscription<Duration>? _posSub;
+  bool _restored = false;
+
+  String get _key => 'pos:${widget.title}:$_index';
 
   bool _isMedia(String u) {
     final l = u.toLowerCase();
@@ -1084,14 +1107,54 @@ class _PlayerPageState extends State<PlayerPage> {
     return l.contains('.m3u8') || l.contains('.mp4') || l.contains('type=m3u8') || l.contains('mime=video');
   }
 
-  void _hit(String u) {
+  Future<void> _hit(String u) async {
     if (_mediaUrl != null || !_isMedia(u)) return;
     setState(() => _mediaUrl = u);
-    _player.open(Media(u));
+    await _player.open(Media(u));
+    if (!_restored) {
+      _restored = true;
+      final sp = await SharedPreferences.getInstance();
+      final ms = sp.getInt(_key) ?? 0;
+      if (ms > 5000) {
+        await _player.seek(Duration(milliseconds: ms));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('已从上次位置继续（${(ms / 60000).toStringAsFixed(1)} 分钟）'), duration: const Duration(seconds: 2)),
+          );
+        }
+      }
+    }
+    _posSub ??= _player.stream.position.listen((p) async {
+      final sp = await SharedPreferences.getInstance();
+      sp.setInt(_key, p.inMilliseconds);
+    });
+    _player.stream.completed.listen((done) async {
+      if (done && _index + 1 < widget.episodes.length && mounted) {
+        final sp = await SharedPreferences.getInstance();
+        await sp.remove(_key);
+        setState(() {
+          _index += 1;
+          _mediaUrl = null;
+          _restored = false;
+        });
+        if (mounted) {
+          Navigator.of(context).pushReplacement(MaterialPageRoute(
+            builder: (_) => PlayerPage(
+              title: widget.title,
+              playPage: widget.episodes[_index],
+              episodes: widget.episodes,
+              labels: widget.labels,
+              index: _index,
+            ),
+          ));
+        }
+      }
+    });
   }
 
   @override
   void dispose() {
+    _posSub?.cancel();
     _player.dispose();
     super.dispose();
   }
@@ -1103,7 +1166,7 @@ class _PlayerPageState extends State<PlayerPage> {
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        title: Text(widget.title, style: const TextStyle(fontSize: 14)),
+        title: Text('${widget.title} · ${widget.labels[_index]}', style: const TextStyle(fontSize: 14)),
         actions: [
           if (_mediaUrl != null)
             IconButton(
@@ -1119,7 +1182,8 @@ class _PlayerPageState extends State<PlayerPage> {
             Video(controller: _vc)
           else
             InAppWebView(
-              initialUrlRequest: URLRequest(url: WebUri(widget.playPage)),
+              key: ValueKey('${widget.playPage}-$_index'),
+              initialUrlRequest: URLRequest(url: WebUri(widget.episodes[_index])),
               initialSettings: InAppWebViewSettings(
                 javaScriptEnabled: true,
                 mediaPlaybackRequiresUserGesture: false,
