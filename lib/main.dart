@@ -146,19 +146,28 @@ Future<List<Anime>> fetchSeason() async {
 class Source {
   final String name;
   final String base;
-  /// 详情页地址模板，{id} 会被替换
+  /// maccms: /index.php/ajax/suggest 搜索；mxdm: /search/?wd= HTML 搜索
+  final String kind;
   final String detailPath;
-  /// 详情页里选集链接的正则
   final String episodeRegex;
+  /// 播放页里直接带 m3u8（true 时不走 WebView 嗅探）
+  final bool directM3u8;
   const Source(
     this.name,
     this.base, {
+    this.kind = 'maccms',
     this.detailPath = '/index.php/vod/detail/id/{id}.html',
     this.episodeRegex = r'/play/\d+_\d+_\d+\.html',
+    this.directM3u8 = false,
   });
 }
 
 const sources = <Source>[
+  Source('MXdm', 'https://www.dcc3.com',
+      kind: 'mxdm',
+      detailPath: '/detail/{id}/',
+      episodeRegex: r'/play/\d+-\d+-\d+/',
+      directM3u8: true),
   Source('Moonci', 'https://www.moonci.com',
       detailPath: '/anime/{id}.html',
       episodeRegex: r'/anime/\d+/play/\d+-\d+\.html'),
@@ -184,10 +193,24 @@ Future<List<Hit>> searchSources(String kw, List<String> logs) async {
   final results = <Hit>[];
   await Future.wait(sources.map((s) async {
     try {
+      final url = s.kind == 'mxdm'
+          ? '${s.base}/search/?wd=$enc'
+          : '${s.base}/index.php/ajax/suggest?mid=1&wd=$enc';
       final r = await http.get(
-        Uri.parse('${s.base}/index.php/ajax/suggest?mid=1&wd=$enc'),
+        Uri.parse(url),
         headers: {'User-Agent': _ua},
       ).timeout(const Duration(seconds: 12));
+      if (s.kind == 'mxdm') {
+        final re = RegExp(r'<a class="cover" href="/detail/(\d+)/" title="([^"]+)">\s*<img[^>]*data-original="([^"]+)"');
+        final hits = <Hit>[];
+        for (final m in re.allMatches(r.body)) {
+          hits.add(Hit(m.group(2)!.trim(), int.parse(m.group(1)!),
+              m.group(3)!.replaceFirst('http://', 'https://'), s));
+        }
+        logs.add('${s.name}: ${hits.length}');
+        results.addAll(hits);
+        return;
+      }
       if (!r.body.trimLeft().startsWith('{')) {
         logs.add('${s.name}: HTTP ${r.statusCode}');
         return;
@@ -209,6 +232,14 @@ Future<List<Hit>> searchSources(String kw, List<String> logs) async {
   return results;
 }
 
+/// MXdm 这类站点：播放页 HTML 里直接带 m3u8
+Future<String> directM3u8Of(String playPageUrl) async {
+  final r = await http.get(Uri.parse(playPageUrl), headers: {'User-Agent': _ua})
+      .timeout(const Duration(seconds: 15));
+  final m = RegExp(r'https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*').firstMatch(r.body);
+  return m?.group(0) ?? '';
+}
+
 Future<List<Episode>> episodesOf(Hit hit) async {
   try {
     final detail = '${hit.source.base}${hit.source.detailPath.replaceAll('{id}', '${hit.id}')}';
@@ -222,7 +253,7 @@ Future<List<Episode>> episodesOf(Hit hit) async {
       final path = m.group(0)!;
       if (!seen.add(path)) continue;
       // 兼容 xxx_1_2.html / xxx/play/1-2.html 两种命名
-      final nums = RegExp(r'(\d+)[._-](\d+)\.html').allMatches(path).toList();
+      final nums = RegExp(r'(\d+)[._\-/](\d+)(?:\.html|/)$').allMatches(path).toList();
       final last = nums.isEmpty ? null : nums.last;
       final line = last?.group(1) ?? '1';
       final ep = last?.group(2) ?? '${out.length + 1}';
@@ -1320,6 +1351,7 @@ class _WatchPageState extends State<WatchPage> {
                         episodes: eps.map((e) => e.url).toList(),
                         index: i,
                         labels: eps.map((e) => e.label).toList(),
+                        direct: _picked!.source.directM3u8,
                       ),
                     )),
                     child: Container(
@@ -1343,6 +1375,8 @@ class PlayerPage extends StatefulWidget {
   final List<String> labels;
   final int index;
   final String cover;
+  /// 该源播放页直接带 m3u8（MXdm 等），不用 WebView 嗅探
+  final bool direct;
   const PlayerPage({
     super.key,
     required this.title,
@@ -1351,6 +1385,7 @@ class PlayerPage extends StatefulWidget {
     required this.labels,
     required this.index,
     this.cover = '',
+    this.direct = false,
   });
   @override
   State<PlayerPage> createState() => _PlayerPageState();
@@ -1368,6 +1403,27 @@ class _PlayerPageState extends State<PlayerPage> {
   int _lastSaved = 0;
 
   String get _key => 'pos:${widget.title}:$_index';
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.direct) _resolveDirect();
+  }
+
+  Future<void> _resolveDirect() async {
+    try {
+      final url = await directM3u8Of(widget.playPage);
+      if (url.isNotEmpty) {
+        await _hit(url);
+        return;
+      }
+    } catch (_) {}
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('这个源没解析到 m3u8，已切回网页播放')),
+      );
+    }
+  }
 
   bool _isMedia(String u) {
     final l = u.toLowerCase();

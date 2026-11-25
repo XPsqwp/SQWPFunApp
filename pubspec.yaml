@@ -1,7 +1,7 @@
 name: sqwpfun
 description: "SQWPFun - our own anime app, media_kit player with inappwebview sniffer"
 publish_to: "none"
-version: 0.9.0+9
+version: 0.10.0+10
 
 environment:
   sdk: ">=3.4.0 <4.0.0"
