@@ -299,7 +299,7 @@ Future<List<Episode>> episodesOf(Hit hit) async {
       hit.source.episodeRegex,
       r'/play/[\d_-]+\.html',
       r'/play/\d+-\d+-\d+/',
-      r'href="([^"\'#]+(?:play|vodplay)[^"\'#]*)"',
+      '<a[^>]+href="([^"#]+(?:play|vodplay)[^"#]*)"',
     ];
     var paths = <String>[];
     for (final pat in patterns) {
