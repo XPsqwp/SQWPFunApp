@@ -2,8 +2,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:xml/xml.dart';
-import 'package:xpath/xpath.dart';
 
 const kUA =
     'Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36';
@@ -21,9 +19,10 @@ class Rule {
   String namePath;
   String picPath;
   String linkPath;
-  /// 详情页里选集：正则（匹配 href）或 XPath
+  /// HTML 模式：搜索结果正则（3 组：名称、链接、封面）
+  String searchRegex;
+  /// 详情页里选集：正则（匹配 href）
   String chapterRegex;
-  String chapterPath;
   String userAgent;
   String referer;
   bool enabled;
@@ -37,8 +36,8 @@ class Rule {
     this.namePath = r'$.name',
     this.picPath = r'$.pic',
     this.linkPath = '',
+    this.searchRegex = '',
     this.chapterRegex = '',
-    this.chapterPath = '',
     this.userAgent = '',
     this.referer = '',
     this.enabled = true,
@@ -55,8 +54,8 @@ class Rule {
         'namePath': namePath,
         'picPath': picPath,
         'linkPath': linkPath,
+        'searchRegex': searchRegex,
         'chapterRegex': chapterRegex,
-        'chapterPath': chapterPath,
         'userAgent': userAgent,
         'referer': referer,
         'enabled': enabled,
@@ -71,8 +70,8 @@ class Rule {
         namePath: (j['namePath'] ?? r'$.name').toString(),
         picPath: (j['picPath'] ?? r'$.pic').toString(),
         linkPath: (j['linkPath'] ?? '').toString(),
+        searchRegex: (j['searchRegex'] ?? '').toString(),
         chapterRegex: (j['chapterRegex'] ?? '').toString(),
-        chapterPath: (j['chapterPath'] ?? '').toString(),
         userAgent: (j['userAgent'] ?? '').toString(),
         referer: (j['referer'] ?? '').toString(),
         enabled: j['enabled'] as bool? ?? true,
@@ -179,57 +178,18 @@ class Engine {
 
   static List<Hit> _searchHtml(Rule rule, String body) {
     final out = <Hit>[];
+    if (rule.searchRegex.isEmpty) return out;
     try {
-      final doc = XmlDocument.parse(body);
-      final nodes = _xpNodes(doc, rule.listPath);
-      for (final n in nodes) {
-        if (n is! XmlNode) continue;
-        final name = _xpText(n, rule.namePath);
-        var href = _xpText(n, rule.linkPath);
-        if (href.isEmpty) {
-          final linkNode = _xpNodes(n, rule.linkPath);
-          if (linkNode.isNotEmpty && linkNode.first is XmlElement) {
-            href = (linkNode.first as XmlElement).getAttribute('href') ?? '';
-          }
-        }
-        final pic = _xpText(n, rule.picPath);
-        if (href.isEmpty) continue;
-        final detail = href.startsWith('http') ? href : '${rule.baseUrl}$href';
-        out.add(Hit(name, pic.replaceFirst('http://', 'https://'), detail, rule));
+      for (final m in RegExp(rule.searchRegex, dotAll: true).allMatches(body)) {
+        final name = m.groupCount >= 1 ? (m.group(1) ?? '').trim() : '';
+        final link = m.groupCount >= 2 ? (m.group(2) ?? '').trim() : '';
+        final pic = m.groupCount >= 3 ? (m.group(3) ?? '').trim() : '';
+        if (link.isEmpty) continue;
+        out.add(Hit(name, pic.replaceFirst('http://', 'https://'),
+            link.startsWith('http') ? link : '${rule.baseUrl}$link', rule));
       }
     } catch (_) {}
     return out;
-  }
-
-  static String _xpText(XmlNode node, String path) {
-    if (path.isEmpty) return '';
-    try {
-      final r = _xpNodes(node, path);
-      if (r.isEmpty) return '';
-      final first = r.first;
-      if (first is XmlAttribute) return first.value;
-      if (first is XmlElement) return first.innerText.trim();
-      return first.toString();
-    } catch (_) {
-      return '';
-    }
-  }
-
-  /// 兼容 package:xpath 不同版本的返回类型
-  static List<dynamic> _xpNodes(XmlNode ctx, String expr) {
-    try {
-      final r = XPath(expr).apply(ctx);
-      if (r == null) return const [];
-      final dyn = r as dynamic;
-      try {
-        final nodes = dyn.nodes;
-        if (nodes is List) return nodes;
-      } catch (_) {}
-      if (r is List) return r;
-      return const [];
-    } catch (_) {
-      return const [];
-    }
   }
 
   static dynamic _digJson(dynamic data, String path) {
@@ -279,22 +239,6 @@ class Engine {
             href.startsWith('http') ? href : '${hit.rule.baseUrl}$href'));
       }
       return out;
-    }
-    if (hit.rule.chapterPath.isNotEmpty) {
-      try {
-        final doc = XmlDocument.parse(body);
-        final nodes = _xpNodes(doc, hit.rule.chapterPath);
-        for (final n in nodes) {
-          if (n is XmlElement) {
-            final href = n.getAttribute('href') ?? '';
-            if (href.isEmpty) continue;
-            out.add(Episode(
-              n.innerText.trim().isEmpty ? '第${out.length + 1}话' : n.innerText.trim(),
-              href.startsWith('http') ? href : '${hit.rule.baseUrl}$href',
-            ));
-          }
-        }
-      } catch (_) {}
     }
     return out;
   }
