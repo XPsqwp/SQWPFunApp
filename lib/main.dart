@@ -236,7 +236,8 @@ Future<List<Hit>> searchSources(String kw, List<String> logs) async {
 Future<String> directM3u8Of(String playPageUrl) async {
   final r = await http.get(Uri.parse(playPageUrl), headers: {'User-Agent': _ua})
       .timeout(const Duration(seconds: 15));
-  final m = RegExp(r'https?://[^\s"\'<>]+\.m3u8[^\s"\'<>]*').firstMatch(r.body);
+  const pat = r'''https?://[^\s"'<>]+\.m3u8[^\s"'<>]*''';
+  final m = RegExp(pat).firstMatch(r.body);
   return m?.group(0) ?? '';
 }
 
