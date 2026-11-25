@@ -145,12 +145,23 @@ Future<List<Anime>> fetchSeason() async {
 class Source {
   final String name;
   final String base;
-  const Source(this.name, this.base);
+  /// 详情页地址模板，{id} 会被替换
+  final String detailPath;
+  /// 详情页里选集链接的正则
+  final String episodeRegex;
+  const Source(
+    this.name,
+    this.base, {
+    this.detailPath = '/index.php/vod/detail/id/{id}.html',
+    this.episodeRegex = r'/play/\d+_\d+_\d+\.html',
+  });
 }
 
 const sources = <Source>[
+  Source('Moonci', 'https://www.moonci.com',
+      detailPath: '/anime/{id}.html',
+      episodeRegex: r'/anime/\d+/play/\d+-\d+\.html'),
   Source('LMM', 'https://www.lmm85.com'),
-  Source('Moonci', 'https://www.moonci.com'),
 ];
 
 class Hit {
@@ -199,18 +210,21 @@ Future<List<Hit>> searchSources(String kw, List<String> logs) async {
 
 Future<List<Episode>> episodesOf(Hit hit) async {
   try {
+    final detail = '${hit.source.base}${hit.source.detailPath.replaceAll('{id}', '${hit.id}')}';
     final r = await http.get(
-      Uri.parse('${hit.source.base}/index.php/vod/detail/id/${hit.id}.html'),
+      Uri.parse(detail),
       headers: {'User-Agent': _ua},
     ).timeout(const Duration(seconds: 15));
-    final re = RegExp('/play/${hit.id}_(\\d+)_(\\d+)\\.html');
     final seen = <String>{};
     final out = <Episode>[];
-    for (final m in re.allMatches(r.body)) {
+    for (final m in RegExp(hit.source.episodeRegex).allMatches(r.body)) {
       final path = m.group(0)!;
       if (!seen.add(path)) continue;
-      final line = m.group(1)!;
-      final ep = m.group(2)!;
+      // 兼容 xxx_1_2.html / xxx/play/1-2.html 两种命名
+      final nums = RegExp(r'(\d+)[._-](\d+)\.html').allMatches(path).toList();
+      final last = nums.isEmpty ? null : nums.last;
+      final line = last?.group(1) ?? '1';
+      final ep = last?.group(2) ?? '${out.length + 1}';
       out.add(Episode(line == '1' ? '第$ep话' : '线路$line·第$ep话', '${hit.source.base}$path'));
     }
     return out;
