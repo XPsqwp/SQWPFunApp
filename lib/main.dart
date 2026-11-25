@@ -898,7 +898,7 @@ class RecommendPage extends StatelessWidget {
           const SliverToBoxAdapter(
             child: Padding(
               padding: EdgeInsets.fromLTRB(20, 18, 20, 8),
-              child: Text('热门番剧', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _ink)),
+              child: Text('热门番组', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _ink)),
             ),
           ),
           if (loading)
@@ -998,12 +998,19 @@ class SchedulePage extends StatelessWidget {
       groups.putIfAbsent(a.weekday, () => []).add(a);
     }
     final keys = groups.keys.toList()..sort();
+    final today = DateTime.now().weekday;
+    for (final k in keys) {
+      groups[k]!.sort((a, b) => _hotScore(b, today).compareTo(_hotScore(a, today)));
+    }
     return SafeArea(
       bottom: false,
       child: ListView(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 120),
         children: [
-          const Text('每周放送', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: _ink)),
+          const Text('时间表', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: _ink)),
+          const SizedBox(height: 6),
+          Text('全部新番 · ${catalog.length} 部',
+              style: const TextStyle(fontSize: 12, color: _sub)),
           const SizedBox(height: 8),
           ...keys.expand((k) => [
                 Padding(
