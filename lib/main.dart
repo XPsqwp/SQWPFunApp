@@ -163,15 +163,36 @@ class Source {
 }
 
 const sources = <Source>[
-  Source('MXdm', 'https://www.dcc3.com',
-      kind: 'mxdm',
-      detailPath: '/detail/{id}/',
-      episodeRegex: r'/play/\d+-\d+-\d+/',
-      directM3u8: true),
-  Source('Moonci', 'https://www.moonci.com',
-      detailPath: '/anime/{id}.html',
-      episodeRegex: r'/anime/\d+/play/\d+-\d+\.html'),
-  Source('LMM', 'https://www.lmm85.com'),
+  Source('MXdm', 'https://www.dcc3.com', kind: 'mxdm',
+      detailPath: '/detail/{id}/', episodeRegex: r'/play/\d+-\d+-\d+/'),
+  Source('9ciyuan', 'https://www.jcydm1.com',
+      episodeRegex: r'/play/[\d_-]+\.html'),
+  Source('aafun', 'https://www.moonci.com',
+      episodeRegex: r'/play/[\d_-]+\.html'),
+  Source('akianime', 'https://www.akianime.cc',
+      episodeRegex: r'/play/[\d_-]+\.html'),
+  Source('anime7', 'https://anime7.top',
+      episodeRegex: r'/play/[\d_-]+\.html'),
+  Source('ant', 'https://www.mayi520.org',
+      episodeRegex: r'/play/[\d_-]+\.html'),
+  Source('dalvdm', 'https://www.sbdl.cc',
+      episodeRegex: r'/play/[\d_-]+\.html'),
+  Source('DM84', 'https://dmbus.cc',
+      episodeRegex: r'/play/[\d_-]+\.html'),
+  Source('eacg', 'https://eacg1.com',
+      episodeRegex: r'/play/[\d_-]+\.html'),
+  Source('Fantuan', 'https://acgpost.com',
+      episodeRegex: r'/play/[\d_-]+\.html'),
+  Source('FQDM', 'https://www.fqdm.cc',
+      episodeRegex: r'/play/[\d_-]+\.html'),
+  Source('MT', 'https://www.mutean.com',
+      episodeRegex: r'/play/[\d_-]+\.html'),
+  Source('qkan9', 'https://www.qkan9.com',
+      episodeRegex: r'/play/[\d_-]+\.html'),
+  Source('WYDM', 'https://www.vdm5.com',
+      episodeRegex: r'/play/[\d_-]+\.html'),
+  Source('yishijie', 'https://www.dmmiku.com',
+      episodeRegex: r'/play/[\d_-]+\.html'),
 ];
 
 class Hit {
@@ -199,7 +220,7 @@ Future<List<Hit>> searchSources(String kw, List<String> logs) async {
       final r = await http.get(
         Uri.parse(url),
         headers: {'User-Agent': _ua},
-      ).timeout(const Duration(seconds: 12));
+      ).timeout(const Duration(seconds: 8));
       if (s.kind == 'mxdm') {
         final re = RegExp(r'<a class="cover" href="/detail/(\d+)/" title="([^"]+)">\s*<img[^>]*data-original="([^"]+)"');
         final hits = <Hit>[];
@@ -207,7 +228,7 @@ Future<List<Hit>> searchSources(String kw, List<String> logs) async {
           hits.add(Hit(m.group(2)!.trim(), int.parse(m.group(1)!),
               m.group(3)!.replaceFirst('http://', 'https://'), s));
         }
-        logs.add('${s.name}: ${hits.length}');
+        if (hits.isNotEmpty) logs.add('${s.name}:${hits.length}');
         results.addAll(hits);
         return;
       }
@@ -216,7 +237,7 @@ Future<List<Hit>> searchSources(String kw, List<String> logs) async {
         return;
       }
       final list = (jsonDecode(r.body) as Map)['list'] as List? ?? [];
-      logs.add('${s.name}: ${list.length}');
+      if (list.isNotEmpty) logs.add('${s.name}:${list.length}');
       for (final it in list) {
         results.add(Hit(
           (it['name'] ?? '').toString(),
