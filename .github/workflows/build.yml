@@ -20,18 +20,9 @@ jobs:
         run: |
           flutter create --platforms=android --org com.sqwpf --project-name sqwpfun _scaffold
           cp -r _scaffold/android .
-          sed -i 's/android:label="sqwpfun"/android:label="SQWPFun"/' android/app/src/main/AndroidManifest.xml
-          # Flutter 模板只在 debug/profile 清单里放 INTERNET，release 必须自己加，
-          # 否则所有 http 请求都会 _ClientSocketException
-          sed -i 's|<application|<application android:usesCleartextTraffic="true"|' android/app/src/main/AndroidManifest.xml
-          sed -i 's|<application|<uses-permission android:name="android.permission.INTERNET"/>\n    <application|' android/app/src/main/AndroidManifest.xml
-          grep -n "INTERNET\|usesCleartext" android/app/src/main/AndroidManifest.xml
-      - name: Copy SQWPFun launcher icons
-        run: |
-          for d in icons/mipmap-*; do
-            cp -f "$d/ic_launcher.png" "android/app/src/main/res/$(basename $d)/ic_launcher.png"
-            echo "icon -> $(basename $d)"
-          done
+          cp keystore/sqwp.jks android/app/sqwp.jks
+          python3 tool/patch_android.py
+          grep -n "signingConfigs\|sqwp.jks\|INTERNET" android/app/build.gradle.kts android/app/src/main/AndroidManifest.xml | head
       - run: flutter pub get
       - name: Patch inappwebview proguard rule (newer AGP rejects -dontoptimize)
         run: |
