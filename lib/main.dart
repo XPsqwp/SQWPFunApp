@@ -888,6 +888,7 @@ class WatchPage extends StatefulWidget {
 
 class _WatchPageState extends State<WatchPage> {
   final List<String> _logs = [];
+  final _kwCtrl = TextEditingController();
   List<Hit>? _hits;
   List<Episode>? _episodes;
   Hit? _picked;
@@ -896,14 +897,56 @@ class _WatchPageState extends State<WatchPage> {
   @override
   void initState() {
     super.initState();
+    _kwCtrl.text = widget.title;
     _search();
   }
 
+  @override
+  void dispose() {
+    _kwCtrl.dispose();
+    super.dispose();
+  }
+
+  /// 站点的番名和情报源的番名往往不一致：去季数、"第Xクール"、括注，再退到前 4 个字
+  List<String> _variants(String title) {
+    final out = <String>[];
+    final stripped = title
+        .replaceAll(RegExp(r'第[一二三四五六七八九十0-9]+[季期部]'), '')
+        .replaceAll(RegExp(r'第\s*[0-9]+\s*クール'), '')
+        .replaceAll(RegExp(r'Season\s*\d+', caseSensitive: false), '')
+        .replaceAll(RegExp(r'[（(].*?[)）]'), '')
+        .trim();
+    if (stripped.isNotEmpty && stripped != title) out.add(stripped);
+    final tokens = stripped
+        .split(RegExp(r'[\s·・:：\-—/]+'))
+        .where((e) => e.trim().length >= 2)
+        .toList();
+    if (tokens.length > 1) out.add(tokens.first);
+    if (stripped.length > 4) out.add(stripped.substring(0, 4));
+    return out.where((e) => e.trim().isNotEmpty && e.trim() != title).toList();
+  }
+
   Future<void> _search() async {
-    final hits = await searchSources(widget.title, _logs);
+    final kw = _kwCtrl.text.trim();
+    if (kw.isEmpty) return;
+    _logs.clear();
+    setState(() {
+      _loading = true;
+      _hits = null;
+    });
+    final merged = <String, Hit>{};
+    final queries = <String>[kw, ..._variants(kw)];
+    for (final q in queries) {
+      final hits = await searchSources(q, _logs);
+      if (hits.isEmpty) continue;
+      for (final h in hits) {
+        merged.putIfAbsent('${h.source.name}-${h.id}', () => h);
+      }
+      if (merged.length >= 8) break;
+    }
     if (!mounted) return;
     setState(() {
-      _hits = hits;
+      _hits = merged.values.toList();
       _loading = false;
     });
   }
@@ -953,6 +996,28 @@ class _WatchPageState extends State<WatchPage> {
               ? ListView(
                   padding: const EdgeInsets.all(16),
                   children: [
+                    TextField(
+                      controller: _kwCtrl,
+                      style: const TextStyle(fontSize: 13),
+                      textInputAction: TextInputAction.search,
+                      onSubmitted: (_) => _search(),
+                      decoration: InputDecoration(
+                        isDense: true,
+                        hintText: '换个关键词再搜（站点番名可能和情报源不同）',
+                        prefixIcon: const Icon(Icons.search, size: 18),
+                        suffixIcon: IconButton(
+                          icon: const Icon(Icons.arrow_forward, size: 18),
+                          onPressed: _search,
+                        ),
+                        filled: true,
+                        fillColor: Colors.white10,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
                     Text(_logs.join('   '), style: const TextStyle(fontSize: 10, color: Colors.white38)),
                     const SizedBox(height: 8),
                     ...(_hits ?? []).map((h) => Card(
