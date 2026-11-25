@@ -209,6 +209,22 @@ class Episode {
   Episode(this.label, this.url);
 }
 
+double _hitScore(Hit h, String kw) {
+  var s = 0.0;
+  if (h.source.directM3u8) s += 1000;          // 直出 m3u8 的源，一定能播
+  if (h.pic.isNotEmpty) s += 60;                // 有封面通常说明索引正常
+  final t = h.name;
+  if (t == kw) {
+    s += 300;
+  } else if (t.startsWith(kw)) {
+    s += 200;
+  } else if (t.contains(kw)) {
+    s += 100;
+  }
+  s -= (t.length.clamp(0, 40)) * 0.5;           // 短标题更可能是正片，OAD/剧场版排后面
+  return s;
+}
+
 Future<List<Hit>> searchSources(String kw, List<String> logs) async {
   final enc = Uri.encodeComponent(kw);
   final results = <Hit>[];
@@ -250,7 +266,13 @@ Future<List<Hit>> searchSources(String kw, List<String> logs) async {
       logs.add('${s.name}: ${e.runtimeType}');
     }
   }));
-  return results;
+  final seen = <String>{};
+  final uniq = <Hit>[];
+  for (final h in results) {
+    if (seen.add('${h.source.name}|${h.name}')) uniq.add(h);
+  }
+  uniq.sort((a, b) => _hitScore(b, kw).compareTo(_hitScore(a, kw)));
+  return uniq;
 }
 
 /// MXdm 这类站点：播放页 HTML 里直接带 m3u8
@@ -1259,6 +1281,11 @@ class _WatchPageState extends State<WatchPage> {
       for (final h in hits) {
         merged.putIfAbsent('${h.source.name}-${h.id}', () => h);
       }
+      final sorted = merged.values.toList()
+        ..sort((a, b) => _hitScore(b, kw).compareTo(_hitScore(a, kw)));
+      merged
+        ..clear()
+        ..addEntries(sorted.map((h) => MapEntry('${h.source.name}-${h.id}', h)));
       if (merged.length >= 8) break;
     }
     if (!mounted) return;
