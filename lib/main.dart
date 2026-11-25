@@ -234,6 +234,74 @@ Future<List<Episode>> episodesOf(Hit hit) async {
   }
 }
 
+/* ---------------------------- 观看历史 ---------------------------- */
+
+class WatchEntry {
+  final String title;
+  final String cover;
+  final List<String> urls;
+  final List<String> labels;
+  int index;
+  int posMs;
+  int updatedAt;
+
+  WatchEntry({
+    required this.title,
+    required this.cover,
+    required this.urls,
+    required this.labels,
+    required this.index,
+    required this.posMs,
+    required this.updatedAt,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'title': title,
+        'cover': cover,
+        'urls': urls,
+        'labels': labels,
+        'index': index,
+        'posMs': posMs,
+        'updatedAt': updatedAt,
+      };
+
+  factory WatchEntry.fromJson(Map<String, dynamic> j) => WatchEntry(
+        title: j['title'] ?? '',
+        cover: j['cover'] ?? '',
+        urls: List<String>.from(j['urls'] ?? []),
+        labels: List<String>.from(j['labels'] ?? []),
+        index: j['index'] ?? 0,
+        posMs: j['posMs'] ?? 0,
+        updatedAt: j['updatedAt'] ?? 0,
+      );
+}
+
+class WatchHistory {
+  static Future<List<WatchEntry>> load() async {
+    final sp = await SharedPreferences.getInstance();
+    final raw = sp.getString('history');
+    if (raw == null) return [];
+    final list = (jsonDecode(raw) as List)
+        .map((e) => WatchEntry.fromJson(Map<String, dynamic>.from(e as Map)))
+        .toList();
+    list.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return list;
+  }
+
+  static Future<void> upsert(WatchEntry entry) async {
+    final sp = await SharedPreferences.getInstance();
+    final list = await load();
+    final i = list.indexWhere((e) => e.title == entry.title);
+    if (i >= 0) {
+      list[i] = entry;
+    } else {
+      list.insert(0, entry);
+    }
+    final keep = list.take(20).toList();
+    await sp.setString('history', jsonEncode(keep.map((e) => e.toJson()).toList()));
+  }
+}
+
 /* ------------------------------- App ------------------------------- */
 
 class SqwpApp extends StatelessWidget {
@@ -267,12 +335,14 @@ class _HomeShellState extends State<HomeShell> {
   String? _error;
   String _query = '';
   List<Anime> _favorites = [];
+  List<WatchEntry> _history = [];
 
   @override
   void initState() {
     super.initState();
     _load();
     _loadFav();
+    _reloadHistory();
   }
 
   Future<void> _load() async {
@@ -290,6 +360,12 @@ class _HomeShellState extends State<HomeShell> {
         _loading = false;
       });
     }
+  }
+
+  Future<void> _reloadHistory() async {
+    final h = await WatchHistory.load();
+    if (!mounted) return;
+    setState(() => _history = h);
   }
 
   Future<void> _loadFav() async {
@@ -329,11 +405,25 @@ class _HomeShellState extends State<HomeShell> {
         loading: _loading,
         error: _error,
         query: _query,
+        history: _history,
         onQuery: (v) => setState(() => _query = v),
         onOpen: (a) => _openDetail(a),
-        onWatch: (t) => Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => WatchPage(title: t)),
-        ),
+        onResume: (h) async {
+          await Navigator.of(context).push(MaterialPageRoute(
+            builder: (_) => PlayerPage(
+              title: h.title,
+              playPage: h.urls[h.index],
+              episodes: h.urls,
+              labels: h.labels,
+              index: h.index,
+              cover: h.cover,
+            ),
+          ));
+          _reloadHistory();
+        },
+        onSearchOnline: () => Navigator.of(context)
+            .push(MaterialPageRoute(builder: (_) => const WatchPage(title: '')))
+            .then((_) => _reloadHistory()),
       ),
       SchedulePage(catalog: _catalog, onOpen: (a) => _openDetail(a)),
       FavoritesPage(
@@ -382,8 +472,8 @@ class _HomeShellState extends State<HomeShell> {
         isFav: _favorites.any((e) => e.id == a.id),
         onToggleFav: () => _toggleFav(a),
         onWatch: () => Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => WatchPage(title: a.title)),
-        ),
+          MaterialPageRoute(builder: (_) => WatchPage(title: a.title, cover: a.cover)),
+        ).then((_) => _reloadHistory()),
       ),
     ));
   }
@@ -486,9 +576,11 @@ class RecommendPage extends StatelessWidget {
   final bool loading;
   final String? error;
   final String query;
+  final List<WatchEntry> history;
   final ValueChanged<String> onQuery;
   final ValueChanged<Anime> onOpen;
-  final ValueChanged<String> onWatch;
+  final ValueChanged<WatchEntry> onResume;
+  final VoidCallback onSearchOnline;
 
   const RecommendPage({
     super.key,
@@ -496,56 +588,211 @@ class RecommendPage extends StatelessWidget {
     required this.loading,
     required this.error,
     required this.query,
+    required this.history,
     required this.onQuery,
     required this.onOpen,
-    required this.onWatch,
+    required this.onResume,
+    required this.onSearchOnline,
   });
 
   @override
   Widget build(BuildContext context) {
     final season = currentSeason();
+    final today = DateTime.now().weekday; // 1..7
+    final todayList = catalog.where((a) => a.weekday == today).toList();
     final filtered = catalog.where((a) {
       if (query.isEmpty) return true;
       return a.titleCn.contains(query) || a.titleJp.contains(query) || a.cast.contains(query);
     }).toList();
+    final resume = history.take(6).toList();
 
     return SafeArea(
       bottom: false,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('${seasonName(season)}新番',
-                    style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: _ink)),
-                Text(query.isEmpty ? '共 ${catalog.length} 部 · 数据来自 yuc.wiki' : '匹配 ${filtered.length} 部',
-                    style: const TextStyle(fontSize: 11, color: _sub)),
-                const SizedBox(height: 10),
-                Container(
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.6),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: TextField(
-                    onChanged: onQuery,
-                    decoration: const InputDecoration(
-                      hintText: '搜番名 / 声优',
-                      prefixIcon: Icon(Icons.search, size: 20),
-                      border: InputBorder.none,
-                      contentPadding: EdgeInsets.symmetric(vertical: 14),
+      child: CustomScrollView(
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('${seasonName(season)}新番',
+                            style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold, color: _ink)),
+                        Text(query.isEmpty ? '共 ${catalog.length} 部 · 数据来自 yuc.wiki' : '匹配 ${filtered.length} 部',
+                            style: const TextStyle(fontSize: 11, color: _sub)),
+                      ],
                     ),
                   ),
+                  IconButton(
+                    tooltip: '在线搜索（LMM / Moonci）',
+                    onPressed: onSearchOnline,
+                    icon: const Icon(Icons.travel_explore, color: _ink),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(20, 8, 20, 4),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.6),
+                  borderRadius: BorderRadius.circular(16),
                 ),
-              ],
+                child: TextField(
+                  onChanged: onQuery,
+                  decoration: const InputDecoration(
+                    hintText: '搜番名 / 声优',
+                    prefixIcon: Icon(Icons.search, size: 20),
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(vertical: 14),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          if (resume.isNotEmpty)
+            SliverToBoxAdapter(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(20, 12, 20, 8),
+                    child: Text('继续观看',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _ink)),
+                  ),
+                  SizedBox(
+                    height: 132,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      itemCount: resume.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 10),
+                      itemBuilder: (ctx, i) {
+                        final h = resume[i];
+                        final progress = h.posMs <= 0 ? 0.0 : null;
+                        return GestureDetector(
+                          onTap: () => onResume(h),
+                          child: SizedBox(
+                            width: 220,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(14),
+                              child: Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  CachedNetworkImage(imageUrl: h.cover, fit: BoxFit.cover),
+                                  DecoratedBox(
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        begin: Alignment.topCenter,
+                                        end: Alignment.bottomCenter,
+                                        colors: [Colors.transparent, Colors.black.withValues(alpha: 0.8)],
+                                      ),
+                                    ),
+                                  ),
+                                  Positioned(
+                                    left: 10,
+                                    right: 10,
+                                    bottom: 10,
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(h.title,
+                                            maxLines: 1,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: const TextStyle(
+                                                fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white)),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          '${h.labels.length > h.index ? h.labels[h.index] : '第${h.index + 1}话'}'
+                                          '${progress == null ? ' · 已看 ${(h.posMs / 60000).toStringAsFixed(1)} 分' : ''}',
+                                          style: const TextStyle(fontSize: 10, color: Colors.white70),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const Positioned(
+                                    right: 10,
+                                    top: 10,
+                                    child: Icon(Icons.play_circle_fill, color: Colors.white, size: 26),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (todayList.isNotEmpty)
+            SliverToBoxAdapter(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
+                    child: Text('今日更新',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _ink)),
+                  ),
+                  SizedBox(
+                    height: 180,
+                    child: ListView.separated(
+                      scrollDirection: Axis.horizontal,
+                      padding: const EdgeInsets.symmetric(horizontal: 16),
+                      itemCount: todayList.length,
+                      separatorBuilder: (_, __) => const SizedBox(width: 12),
+                      itemBuilder: (ctx, i) {
+                        final a = todayList[i];
+                        return GestureDetector(
+                          onTap: () => onOpen(a),
+                          child: SizedBox(
+                            width: 108,
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Expanded(
+                                  child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(12),
+                                    child: CachedNetworkImage(imageUrl: a.cover, fit: BoxFit.cover,
+                                        width: double.infinity),
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Text(a.title,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(fontSize: 11, color: _ink)),
+                              ],
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(20, 18, 20, 8),
+              child: Text('全部新番', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: _ink)),
             ),
           ),
           if (loading)
-            const Expanded(child: Center(child: CircularProgressIndicator()))
+            const SliverFillRemaining(
+              hasScrollBody: false,
+              child: Center(child: CircularProgressIndicator()),
+            )
           else if (error != null)
-            Expanded(
+            SliverFillRemaining(
+              hasScrollBody: false,
               child: Center(
                 child: Padding(
                   padding: const EdgeInsets.all(24),
@@ -554,17 +801,19 @@ class RecommendPage extends StatelessWidget {
               ),
             )
           else
-            Expanded(
-              child: GridView.builder(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 120),
+            SliverPadding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 120),
+              sliver: SliverGrid(
                 gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
                   crossAxisCount: 3,
                   mainAxisSpacing: 14,
                   crossAxisSpacing: 12,
                   childAspectRatio: 0.58,
                 ),
-                itemCount: filtered.length,
-                itemBuilder: (ctx, i) => PosterCard(anime: filtered[i], onTap: () => onOpen(filtered[i])),
+                delegate: SliverChildBuilderDelegate(
+                  (ctx, i) => PosterCard(anime: filtered[i], onTap: () => onOpen(filtered[i])),
+                  childCount: filtered.length,
+                ),
               ),
             ),
         ],
@@ -882,7 +1131,8 @@ class DetailPage extends StatelessWidget {
 
 class WatchPage extends StatefulWidget {
   final String title;
-  const WatchPage({super.key, required this.title});
+  final String cover;
+  const WatchPage({super.key, this.title = '', this.cover = ''});
   @override
   State<WatchPage> createState() => _WatchPageState();
 }
@@ -927,8 +1177,8 @@ class _WatchPageState extends State<WatchPage> {
     return out.where((e) => e.trim().isNotEmpty && e.trim() != title).toList();
   }
 
-  Future<void> _search() async {
-    final kw = _kwCtrl.text.trim();
+  Future<void> _search([String? keyword]) async {
+    final kw = (keyword ?? _kwCtrl.text).trim();
     if (kw.isEmpty) return;
     _logs.clear();
     setState(() {
@@ -974,7 +1224,7 @@ class _WatchPageState extends State<WatchPage> {
         backgroundColor: Colors.transparent,
         foregroundColor: Colors.white,
         title: Text(
-          _picked == null ? '在线看 · ${widget.title}' : ((eps == null || eps.isEmpty) ? '没有解析到选集' : '选集 · ${_picked!.name}'),
+          _picked == null ? (widget.title.isEmpty ? '在线搜索' : '在线看 · ${widget.title}') : ((eps == null || eps.isEmpty) ? '没有解析到选集' : '选集 · ${_picked!.name}'),
           style: const TextStyle(fontSize: 14),
         ),
         leading: IconButton(
@@ -997,6 +1247,7 @@ class _WatchPageState extends State<WatchPage> {
               ? ListView(
                   padding: const EdgeInsets.all(16),
                   children: [
+
                     TextField(
                       controller: _kwCtrl,
                       style: const TextStyle(fontSize: 13),
@@ -1078,6 +1329,7 @@ class PlayerPage extends StatefulWidget {
   final List<String> episodes;
   final List<String> labels;
   final int index;
+  final String cover;
   const PlayerPage({
     super.key,
     required this.title,
@@ -1085,6 +1337,7 @@ class PlayerPage extends StatefulWidget {
     required this.episodes,
     required this.labels,
     required this.index,
+    this.cover = '',
   });
   @override
   State<PlayerPage> createState() => _PlayerPageState();
@@ -1098,6 +1351,8 @@ class _PlayerPageState extends State<PlayerPage> {
   String? _resumeKey;
   StreamSubscription<Duration>? _posSub;
   bool _restored = false;
+  int _lastPos = 0;
+  int _lastSaved = 0;
 
   String get _key => 'pos:${widget.title}:$_index';
 
@@ -1124,9 +1379,14 @@ class _PlayerPageState extends State<PlayerPage> {
         }
       }
     }
-    _posSub ??= _player.stream.position.listen((p) async {
-      final sp = await SharedPreferences.getInstance();
-      sp.setInt(_key, p.inMilliseconds);
+    _lastPos = 0;
+    _posSub ??= _player.stream.position.listen((p) {
+      _lastPos = p.inMilliseconds;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (now - _lastSaved > 15000) {
+        _lastSaved = now;
+        _saveHistory();
+      }
     });
     _player.stream.completed.listen((done) async {
       if (done && _index + 1 < widget.episodes.length && mounted) {
@@ -1152,8 +1412,22 @@ class _PlayerPageState extends State<PlayerPage> {
     });
   }
 
+  void _saveHistory() {
+    if (widget.episodes.isEmpty) return;
+    WatchHistory.upsert(WatchEntry(
+      title: widget.title,
+      cover: widget.cover,
+      urls: widget.episodes,
+      labels: widget.labels,
+      index: _index,
+      posMs: _lastPos,
+      updatedAt: DateTime.now().millisecondsSinceEpoch,
+    ));
+  }
+
   @override
   void dispose() {
+    _saveHistory();
     _posSub?.cancel();
     _player.dispose();
     super.dispose();
