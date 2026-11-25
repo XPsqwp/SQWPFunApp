@@ -331,6 +331,18 @@ class _HomeShellState extends State<HomeShell> {
     return Scaffold(
       body: Stack(
         children: [
+          // 1.15 版同款背景渐变
+          const Positioned.fill(
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFFEAF4E6), Color(0xFFF6F1E4), Color(0xFFE8EEF8)],
+                ),
+              ),
+            ),
+          ),
           Positioned.fill(child: pages[_tab]),
           // 底部液态玻璃胶囊导航
           Positioned(
