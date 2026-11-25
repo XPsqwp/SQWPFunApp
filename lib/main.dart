@@ -472,7 +472,12 @@ class _HomeShellState extends State<HomeShell> {
         isFav: _favorites.any((e) => e.id == a.id),
         onToggleFav: () => _toggleFav(a),
         onWatch: () => Navigator.of(context).push(
-          MaterialPageRoute(builder: (_) => WatchPage(title: a.title, cover: a.cover)),
+          MaterialPageRoute(
+            builder: (_) => WatchPage(
+              title: a.title,
+              cover: a.cover,
+              altTitle: a.titleJp == a.title ? '' : a.titleJp,
+            )),
         ).then((_) => _reloadHistory()),
       ),
     ));
@@ -1132,7 +1137,8 @@ class DetailPage extends StatelessWidget {
 class WatchPage extends StatefulWidget {
   final String title;
   final String cover;
-  const WatchPage({super.key, this.title = '', this.cover = ''});
+  final String altTitle;
+  const WatchPage({super.key, this.title = '', this.cover = '', this.altTitle = ''});
   @override
   State<WatchPage> createState() => _WatchPageState();
 }
@@ -1186,7 +1192,14 @@ class _WatchPageState extends State<WatchPage> {
       _hits = null;
     });
     final merged = <String, Hit>{};
-    final queries = <String>[kw, ..._variants(kw)];
+    final queries = <String>[
+      kw,
+      ..._variants(kw),
+      if (widget.altTitle.trim().isNotEmpty && widget.altTitle.trim() != kw) ...[
+        widget.altTitle.trim(),
+        ..._variants(widget.altTitle.trim()),
+      ],
+    ];
     for (final q in queries) {
       final hits = await searchSources(q, _logs);
       if (hits.isEmpty) continue;
